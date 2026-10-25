@@ -1,0 +1,29 @@
+groups:
+  - name: road-crack-alerts
+    rules:
+      - alert: RoadCrackMetricsEndpointDown
+        expr: up{job="road_crack_app"} == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Road-crack app metrics endpoint is unavailable"
+          description: "Prometheus has been unable to scrape the app metrics endpoint for at least one minute."
+
+      - alert: RoadCrackPredictionErrors
+        expr: increase(road_crack_prediction_errors_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Road-crack prediction errors occurred"
+          description: "The app reported one or more prediction errors in the last five minutes."
+
+      - alert: RoadCrackInferenceLatencyHigh
+        expr: histogram_quantile(0.95, sum by (le) (rate(road_crack_inference_duration_seconds_bucket[5m]))) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Road-crack inference is slow"
+          description: "The p95 inference duration has been over 10 seconds for five minutes."

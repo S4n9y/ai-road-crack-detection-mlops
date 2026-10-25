@@ -1,0 +1,9 @@
+# Install alongside the existing app dependencies.
+streamlit
+ultralytics
+pandas
+pillow
+prometheus-client
+mlflow
+requests
+pytest

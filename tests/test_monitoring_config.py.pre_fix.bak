@@ -1,0 +1,83 @@
+"""Validation tests for the monitoring configuration files.
+
+These tests only parse static YAML files; they do not require Docker,
+Prometheus, Grafana, or MLflow to be running. Marquez is intentionally
+excluded from this MLOps setup.
+"""
+
+from pathlib import Path
+
+import pytest
+import yaml
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+MONITORING = PROJECT_ROOT / "monitoring"
+
+try:
+    import mlflow  # noqa: F401
+
+    HAS_MLFLOW = True
+except ImportError:
+    HAS_MLFLOW = False
+
+
+def load_yaml(path):
+    with open(path, "r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle)
+
+
+def test_prometheus_config_scrapes_app():
+    config = load_yaml(MONITORING / "prometheus.yml")
+    jobs = {job["job_name"]: job for job in config["scrape_configs"]}
+    assert "road_crack_app" in jobs
+    targets = jobs["road_crack_app"]["static_configs"][0]["targets"]
+    assert targets == ["host.docker.internal:8001"]
+    # Marquez exclusion: no lineage/Marquez scrape job.
+    assert not any("marquez" in name for name in jobs)
+
+
+def test_prometheus_rules_match_exported_metrics():
+    rules = load_yaml(MONITORING / "alert.rules.yml")
+    exprs = " ".join(
+        rule["expr"]
+        for group in rules["groups"]
+        for rule in group["rules"]
+    )
+    for metric in (
+        "road_crack_prediction_errors_total",
+        "road_crack_inference_duration_seconds_bucket",
+    ):
+        assert metric in exprs
+
+
+def test_alertmanager_has_receiver():
+    config = load_yaml(MONITORING / "alertmanager.yml")
+    receivers = {r["name"] for r in config["receivers"]}
+    assert config["route"]["receiver"] in receivers
+
+
+def test_grafana_datasource_points_to_prometheus():
+    config = load_yaml(
+        MONITORING / "grafana" / "provisioning" / "datasources" / "prometheus.yml"
+    )
+    ds = config["datasources"][0]
+    assert ds["type"] == "prometheus"
+    assert ds["url"] == "http://prometheus:9090"
+
+
+def test_compose_excludes_marquez():
+    compose = load_yaml(MONITORING / "docker-compose.yml")
+    services = compose["services"]
+    assert {"prometheus", "alertmanager", "grafana"} <= set(services)
+    assert not any("marquez" in name for name in services)
+    # Grafana must not collide with the Marquez UI port (3000).
+    assert services["grafana"]["ports"] == ["3001:3000"]
+
+
+@pytest.mark.skipif(not HAS_MLFLOW, reason="mlflow not installed")
+def test_mlflow_helpers_match_app_public_helpers():
+    """The app's public helpers delegate to mlops_helpers."""
+    from mlops_helpers import confidence_band, severity_label
+
+    assert severity_label(50) == "Moderate"
+    assert confidence_band(0.9) == "High confidence"

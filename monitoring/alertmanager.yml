@@ -1,0 +1,12 @@
+route:
+  receiver: "local-demo"
+  group_by: ["alertname", "job"]
+  group_wait: 10s
+  group_interval: 30s
+  repeat_interval: 4h
+
+receivers:
+  - name: "local-demo"
+    # This local starter config shows alerts in the Alertmanager UI but sends
+    # no external notifications. Add email_configs or webhook_configs here
+    # once you have real receiver details; do not commit passwords/tokens.

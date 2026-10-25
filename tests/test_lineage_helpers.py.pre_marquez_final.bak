@@ -1,0 +1,115 @@
+"""Tests for the OpenLineage/Marquez integration (lineage_helpers).
+
+All network calls are stubbed; no Marquez server is required.
+"""
+
+import pytest
+
+import lineage_helpers as lh
+
+
+@pytest.fixture(autouse=True)
+def clean_env(monkeypatch):
+    monkeypatch.delenv("OPENLINEAGE_URL", raising=False)
+    monkeypatch.delenv("OPENLINEAGE_NAMESPACE", raising=False)
+    monkeypatch.delenv("OPENLINEAGE_TIMEOUT", raising=False)
+
+
+def test_config_defaults_and_absent_url():
+    url, ns, timeout = lh.get_lineage_config()
+    assert url is None
+    assert ns == "road_crack"
+    assert timeout == lh.TIMEOUT_DEFAULT
+
+
+def test_config_from_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENLINEAGE_URL", "http://127.0.0.1:5000/")
+    monkeypatch.setenv("OPENLINEAGE_NAMESPACE", "custom_ns")
+    monkeypatch.setenv("OPENLINEAGE_TIMEOUT", "99")
+    url, ns, timeout = lh.get_lineage_config()
+    assert url == "http://127.0.0.1:5000/"
+    assert ns == "custom_ns"
+    # Timeout is clamped to the 1-10 s safety band.
+    assert timeout == 10.0
+
+
+def test_send_event_without_url_is_graceful():
+    ok, msg = lh.send_lineage_event("00000000-0000-0000-0000-000000000000", "START")
+    assert ok is False
+    assert "not configured" in msg
+
+
+def test_send_event_with_bad_type(monkeypatch):
+    monkeypatch.setenv("OPENLINEAGE_URL", "http://127.0.0.1:59999")
+    ok, msg = lh.send_lineage_event("00000000-0000-0000-0000-000000000000", "BOGUS")
+    assert ok is False
+    assert "Invalid event type" in msg
+
+
+def test_send_event_to_dead_marquez_is_bounded_and_graceful(monkeypatch):
+    """A refused connection must return (False, msg) quickly, never raise."""
+    import time
+
+    monkeypatch.setenv("OPENLINEAGE_URL", "http://127.0.0.1:59999")
+    monkeypatch.setenv("OPENLINEAGE_TIMEOUT", "1")
+    started = time.perf_counter()
+    ok, msg = lh.send_lineage_event(
+        "11111111-1111-1111-1111-111111111111",
+        "START",
+        model_info={"model_file": "x.pt"},
+    )
+    elapsed = time.perf_counter() - started
+    assert ok is False
+    assert "unavailable" in msg
+    assert elapsed < 15  # bounded, generous CI margin
+
+
+def test_model_facet_carries_model_identity():
+    facet = lh._model_facet(
+        {
+            "model_file": "best.pt",
+            "model_path": "/x/best.pt",
+            "model_task": "detect",
+            "model_classes": ["alligator cracking"],
+            "model_fingerprint_sha256": "abc123",
+            "model_id": "v2",
+        }
+    )
+    assert facet.modelFile == "best.pt"
+    assert facet.modelTask == "detect"
+    assert facet.sha256 == "abc123"
+    assert facet.modelId == "v2"
+
+
+def test_fetch_run_without_url_is_graceful():
+    ok, msg = lh.fetch_lineage_run("22222222-2222-2222-2222-222222222222")
+    assert ok is False
+    assert "not configured" in msg
+
+
+def test_send_and_fetch_real_marquez_if_available(monkeypatch):
+    """Integration: only runs when OPENLINEAGE_URL points at a live Marquez."""
+    import os
+
+    url = os.environ.get("OPENLINEAGE_URL")
+    if not url:
+        pytest.skip("OPENLINEAGE_URL not set; live Marquez integration test skipped")
+    run_id = "33333333-3333-3333-3333-333333333333"
+    ok, _ = lh.send_lineage_event(
+        run_id,
+        "START",
+        model_info={
+            "model_file": "best.pt",
+            "model_path": "best.pt",
+            "model_task": "detect",
+            "model_classes": [],
+            "model_fingerprint_sha256": "",
+        },
+    )
+    assert ok is True
+    import time
+
+    time.sleep(2)
+    fetched, payload = lh.fetch_lineage_run(run_id)
+    assert fetched is True
+    assert str(payload["id"]).lower() == run_id
