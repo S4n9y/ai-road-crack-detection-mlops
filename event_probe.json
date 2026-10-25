@@ -1,0 +1,14 @@
+{
+    "eventType": "START",
+    "eventTime": "2026-10-17T10:00:00Z",
+    "run": {
+        "runId": "e2e00000-1111-2222-3333-444444444444"
+    },
+    "job": {
+        "namespace": "road_crack",
+        "name": "manual_probe"
+    },
+    "producer": "probe",
+    "inputs": [],
+    "outputs": []
+}
